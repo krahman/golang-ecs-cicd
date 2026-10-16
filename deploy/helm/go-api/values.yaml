@@ -1,0 +1,12 @@
+replicaCount: 2
+image:
+  repository: ""
+  digest: ""
+service:
+  port: 80
+resources:
+  requests:
+    cpu: 100m
+    memory: 64Mi
+  limits:
+    memory: 256Mi

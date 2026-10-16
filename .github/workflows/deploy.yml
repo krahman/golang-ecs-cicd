@@ -1,0 +1,81 @@
+name: Deploy EKS
+on:
+  workflow_run:
+    workflows: ["CI and publish"]
+    types: [completed]
+    branches: [main]
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: eks-production
+  cancel-in-progress: false
+jobs:
+  staging:
+    if: ${{ github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' }}
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: image-digest
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ vars.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_EKS_STAGING_ROLE_ARN }}
+      - name: Deploy staging
+        shell: bash
+        run: |
+          set -euo pipefail
+          DIGEST="$(cat image-digest.txt)"
+          [[ "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
+          aws eks update-kubeconfig --region "$AWS_REGION" --name "$EKS_CLUSTER"
+          helm upgrade --install go-api ./deploy/helm/go-api --namespace go-api --create-namespace --atomic --wait --timeout 5m --set-string image.repository="$ECR_IMAGE" --set-string image.digest="$DIGEST"
+          kubectl -n go-api rollout status deployment/go-api --timeout=180s
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          EKS_CLUSTER: ${{ vars.EKS_CLUSTER }}
+          ECR_IMAGE: ${{ vars.ECR_IMAGE }}
+  production:
+    needs: staging
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: image-digest
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ vars.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_EKS_PROD_ROLE_ARN }}
+      - name: Deploy production
+        shell: bash
+        run: |
+          set -euo pipefail
+          DIGEST="$(cat image-digest.txt)"
+          [[ "$DIGEST" =~ ^sha256:[a-f0-9]{64}$ ]]
+          aws eks update-kubeconfig --region "$AWS_REGION" --name "$EKS_CLUSTER"
+          helm upgrade --install go-api ./deploy/helm/go-api --namespace go-api --create-namespace --atomic --wait --timeout 5m --set-string image.repository="$ECR_IMAGE" --set-string image.digest="$DIGEST"
+          kubectl -n go-api rollout status deployment/go-api --timeout=180s
+        env:
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          EKS_CLUSTER: ${{ vars.EKS_CLUSTER }}
+          ECR_IMAGE: ${{ vars.ECR_IMAGE }}
